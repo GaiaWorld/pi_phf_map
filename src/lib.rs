@@ -11,6 +11,7 @@ extern crate test;
 /// 测试get性能大概PhfMap为1ns, 标准的HashMap大概为3ns
 /// 测试PhfMap::new的性能， 10个kv为200~400ns，30个kv为300~5000ns，100个kv为63~80us，500个kv大概为0.5~0.8ms，可以通过初始大小来大幅提高new的性能，如果想更快的创建，则可以考虑，将k分段，减少单表的数量到16-32左右。
 /// 数组长度上， 10个kv一般为32，30个kv为128，100个kv为1024，500个kv大概为16384或32768
+use core::fmt::*;
 use core::hash::Hash;
 use core::ops::{Index, IndexMut};
 use fixedbitset::FixedBitSet;
@@ -22,7 +23,7 @@ use std::{hash::Hasher, marker::PhantomData, mem};
 
 pub struct PhfMap<K: Hash, V: Null> {
     /// 值数组，空位为Null的V
-    lut: Box<[V]>,
+    lut: Vec<V>,
     /// 元素的数量
     len: usize,
     /// hasher
@@ -95,10 +96,9 @@ impl<K: Hash, V: Null> PhfMap<K, V> {
             }
             end -= 1;
         }
-        let mut lut = (0..(end - offset as usize))
-            .map(|_| V::null())
-            .collect::<Box<[V]>>();
-        let len = vec.len();
+        let len = end - offset as usize;
+        let mut lut = Vec::with_capacity(len);
+        lut.extend((0..len).map(|_| V::null()));
         for (k, v) in vec.into_iter() {
             let i = Self::hash(&k, hasher, right_shift);
             lut[i - offset as usize] = v;
@@ -131,6 +131,26 @@ impl<K: Hash, V: Null> PhfMap<K, V> {
     pub fn get_mut(&mut self, k: &K) -> &mut V {
         let h = self.location(k);
         unsafe { self.lut.get_unchecked_mut(h) }
+    }
+    #[inline(always)]
+    pub fn val_iter(&self) -> Iter<'_, V> {
+        Iter {
+            lut: &self.lut,
+            idx: 0,
+            len: self.len,
+        }
+    }
+    #[inline(always)]
+    pub fn val_iter_mut(&mut self) -> IterMut<'_, V> {
+        IterMut {
+            lut: &mut self.lut,
+            idx: 0,
+            len: self.len,
+        }
+    }
+    #[inline(always)]
+    pub fn into_vec(self) -> Vec<V> {
+        self.lut
     }
     /// 获得k的hash
     #[inline(always)]
@@ -170,6 +190,70 @@ impl<K: Hash, V: Null + Clone> Clone for PhfMap<K, V> {
     }
 }
 
+impl<K: Hash, V: Null + Debug> Debug for PhfMap<K, V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let vec: Vec<&V> = self.val_iter().collect();
+        f.debug_struct("PhfMap")
+            .field("lut", &vec.as_slice())
+            .field("len", &self.len)
+            .field("hasher", &self.hasher)
+            .field("right_shift", &self.right_shift)
+            .field("offset", &self.offset)
+            .finish()
+    }
+}
+
+pub struct Iter<'a, T: Null> {
+    lut: &'a Vec<T>,
+    idx: usize,
+    len: usize,
+}
+
+impl<'a, T: Null> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.idx < self.lut.len() {
+            let v = unsafe { self.lut.get_unchecked(self.idx) };
+            self.idx += 1;
+            if !v.is_null() {
+                return Some(v);
+            }
+        }
+        None
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+impl<T: Null + Debug> Debug for Iter<'_, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_tuple("Iter").field(&self.idx).finish()
+    }
+}
+
+pub struct IterMut<'a, V: Null> {
+    lut: &'a mut Vec<V>,
+    idx: usize,
+    len: usize,
+}
+
+impl<'a, V: Null> Iterator for IterMut<'a, V> {
+    type Item = &'a mut V;
+    fn next(&mut self) -> Option<Self::Item> {
+        let len = self.lut.len();
+        while self.idx < len {
+            let v = unsafe { self.lut.get_unchecked_mut(self.idx) as *mut V };
+            self.idx += 1;
+            if !v.is_null() {
+                return Some(unsafe { &mut *v });
+            }
+        }
+        None
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
 #[cfg(test)]
 mod test_mod {
     extern crate rand;
@@ -191,12 +275,7 @@ mod test_mod {
             arr.push((k, k + 1));
         }
         let map = PhfMap::with_hasher(arr.clone(), 0);
-        println!(
-            "map len:{}, lut: {}, hash:{:?}",
-            map.len(),
-            map.capacity(),
-            map.hasher,
-        );
+        println!("map:{:?}", map);
         for (k, v) in arr {
             let n = map[k];
             assert_eq!(n, v);
@@ -209,7 +288,7 @@ mod test_mod {
 
         let mut rng = rand::thread_rng();
         let mut arr = Vec::new();
-        for _ in 0..10 {
+        for _ in 0..430 {
             let k = rng.gen::<usize>();
             arr.push((k, k + 1));
         }
@@ -250,7 +329,7 @@ mod test_mod {
         }
         let mut suffle = arr.clone();
         suffle.sort();
-        println!("map len:{}", 1);
+        println!("arr len:{}", 1);
         b.iter(move || {
             for &(k, _v) in &arr {
                 let n = suffle.iter().position(|&x| x.0 == k);
