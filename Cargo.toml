@@ -13,6 +13,6 @@ categories = ["data-structures", "phf", "map"]
 [dependencies]
 fxhash = "0.2.1"
 rand ="0.8"
-pi_null = "0.2"
+pi_null = "0.1"
 pi_wy_rng="0.1"
 fixedbitset="0.4"
