@@ -122,15 +122,27 @@ impl<K: Hash, V: Null> PhfMap<K, V> {
     }
     /// 获得指定键的只读引用
     #[inline(always)]
-    pub fn get(&self, k: &K) -> &V {
+    pub fn get(&self, k: &K) -> Option<&V> {
         let h = self.location(k);
-        unsafe { self.lut.get_unchecked(h) }
+        self.lut.get(h)
     }
     /// 获得指定键的可写引用
     #[inline(always)]
-    pub fn get_mut(&mut self, k: &K) -> &mut V {
+    pub fn get_mut(&mut self, k: &K) -> Option<&mut V> {
         let h = self.location(k);
-        unsafe { self.lut.get_unchecked_mut(h) }
+        self.lut.get_mut(h)
+    }
+    /// 获得指定键的只读引用
+    #[inline(always)]
+    pub unsafe fn get_unchecked(&self, k: &K) -> &V {
+        let h = self.location(k);
+        self.lut.get_unchecked(h)
+    }
+    /// 获得指定键的可写引用
+    #[inline(always)]
+    pub unsafe fn get_unchecked_mut(&mut self, k: &K) -> &mut V {
+        let h = self.location(k);
+        self.lut.get_unchecked_mut(h)
     }
     #[inline(always)]
     pub fn val_iter(&self) -> Iter<'_, V> {
@@ -155,7 +167,7 @@ impl<K: Hash, V: Null> PhfMap<K, V> {
     /// 获得k的hash
     #[inline(always)]
     fn location(&self, k: &K) -> usize {
-        Self::hash(k, self.hasher, self.right_shift) - self.offset as usize
+        Self::hash(k, self.hasher, self.right_shift).wrapping_sub(self.offset as usize)
     }
     /// 获得k的hash
     #[inline(always)]
@@ -168,12 +180,12 @@ impl<K: Hash, V: Null> PhfMap<K, V> {
 impl<K: Hash, V: Null> Index<K> for PhfMap<K, V> {
     type Output = V;
     fn index(&self, key: K) -> &V {
-        self.get(&key)
+        self.get(&key).unwrap()
     }
 }
 impl<K: Hash, V: Null> IndexMut<K> for PhfMap<K, V> {
     fn index_mut(&mut self, key: K) -> &mut V {
-        self.get_mut(&key)
+        self.get_mut(&key).unwrap()
     }
 }
 
@@ -295,7 +307,7 @@ mod test_mod {
         b.iter(move || {
             let map = PhfMap::with_hasher(arr.clone(), 0);
             for (k, v) in arr.iter() {
-                let n = map.get(&k);
+                let n = map.get(&k).unwrap();
                 assert_eq!(n, v);
             }
         });
@@ -313,7 +325,7 @@ mod test_mod {
         println!("map capacity:{}", map.capacity());
         b.iter(move || {
             for &(k, v) in &arr {
-                let n = map.get(&k);
+                let n = map.get(&k).unwrap();
                 assert_eq!(*n, v);
             }
         });
